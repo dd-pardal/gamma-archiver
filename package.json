@@ -1,0 +1,26 @@
+{
+	"name": "gamma-archiver",
+	"devDependencies": {
+		"@types/better-sqlite3": "^7.6.3",
+		"@types/node": "^18.17.1",
+		"@types/ws": "^8.5.4",
+		"@typescript-eslint/eslint-plugin": "^6.2.1",
+		"@typescript-eslint/parser": "^6.2.1",
+		"discord-user-api-types": "https://github.com/dd-pardal/discord-user-api-types/releases/download/idk/discord-user-api-types-0.37.51.tgz",
+		"eslint": "^8.46.0",
+		"typescript": "^4.9.5"
+	},
+	"dependencies": {
+		"better-sqlite3": "^7.6.2",
+		"erlpack": "^0.1.4",
+		"undici": "^5.19.1",
+		"ws": "^8.12.1",
+		"zlib-sync": "^0.1.8"
+	},
+	"scripts": {
+		"build": "tsc",
+		"lint": "eslint ./src/",
+		"lint-fix": "eslint --fix ./src/"
+	},
+	"type": "module"
+}

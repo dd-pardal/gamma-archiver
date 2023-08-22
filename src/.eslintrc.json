@@ -1,0 +1,59 @@
+{
+	"root": true,
+	"parser": "@typescript-eslint/parser",
+	"plugins": [
+		"@typescript-eslint"
+	],
+	"parserOptions": {
+		"project": ["./tsconfig.json"]
+	},
+	"extends": [
+		"eslint:recommended",
+		"plugin:@typescript-eslint/recommended",
+		"plugin:@typescript-eslint/recommended-requiring-type-checking",
+		"plugin:@typescript-eslint/strict"
+	],
+	"rules": {
+		"no-inner-declarations": "off",
+		"no-empty-function": "off",
+
+		"@typescript-eslint/ban-ts-comment": "off",
+		"@typescript-eslint/no-non-null-assertion": "off",
+		"@typescript-eslint/explicit-module-boundary-types": ["warn", {
+			"allowArgumentsExplicitlyTypedAsAny": true
+		}],
+		"@typescript-eslint/consistent-type-definitions": ["warn", "type"],
+		"no-constant-condition": ["error", { "checkLoops": false }],
+		"@typescript-eslint/no-unnecessary-condition": ["warn", { "allowConstantLoopConditions": true }],
+		"@typescript-eslint/require-await": "off",
+		"@typescript-eslint/no-dynamic-delete": "off",
+		"@typescript-eslint/no-unused-vars": "warn",
+		"@typescript-eslint/no-invalid-void-type": ["error", { "allowAsThisParameter": true }],
+
+		"@typescript-eslint/no-floating-promises": "off",
+		"@typescript-eslint/no-misused-promises": ["error", { "checksVoidReturn": false }],
+
+		"@typescript-eslint/no-explicit-any": "off",
+		"@typescript-eslint/no-unsafe-argument": "off",
+		"@typescript-eslint/no-unsafe-assignment": "off",
+		"@typescript-eslint/no-unsafe-call": "off",
+		"@typescript-eslint/no-unsafe-member-access": "off",
+		"@typescript-eslint/no-unsafe-return": "off",
+
+		"no-trailing-spaces": "error",
+		"linebreak-style": "error",
+		"@typescript-eslint/indent": ["error", "tab", {
+			"SwitchCase": 1,
+			"flatTernaryExpressions": true
+		}],
+		"@typescript-eslint/semi": ["error", "always"],
+		"@typescript-eslint/quotes": ["error", "double", { "avoidEscape": true }],
+		"@typescript-eslint/object-curly-spacing": ["error", "always"],
+		"@typescript-eslint/space-before-blocks": "error",
+		"@typescript-eslint/member-delimiter-style": ["error"],
+		"@typescript-eslint/comma-dangle": ["error", "always-multiline"]
+	},
+	"env": {
+		"node": true
+	}
+}

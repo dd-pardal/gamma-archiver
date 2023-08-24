@@ -63,13 +63,26 @@ export async function apiReq<T>(endpoint: string, options?: RequestInit, abortIf
 				if (scope !== "shared") {
 					log.warning?.(`Unexpectedly exceeded ${scope === "user" ? "the per-route" : scope === "global" ? "the global" : "an unknown"} rate limit while requesting ${request.method} ${request.url}.`);
 				}
+				let retryAfter: number | undefined = undefined;
+				try {
+					const data = await response.json();
+					if (
+						typeof data === "object" &&
+						data !== null &&
+						"retry_after" in data &&
+						typeof data.retry_after === "number"
+					) {
+						retryAfter = data.retry_after * 1000;
+					}
+				} catch {}
+				interval = retryAfter === undefined ? Math.max(interval, 2_000) : retryAfter;
 			} else if (response.status >= 500 && response.status < 600) {
 				log.warning?.(`Got unexpected server error (HTTP ${response.status} ${response.statusText}) while requesting ${request.method} ${request.url}.`);
 			} else {
 				const rateLimitReset =
-					!response.headers.has("x-ratelimit-remaining") ? undefined :
-					response.headers.get("x-ratelimit-remaining") !== "0" ? Promise.resolve() :
-					timeout(Number.parseFloat(response.headers.get("x-ratelimit-reset-after")!)*1000, options?.signal);
+					!response.headers.has("X-RateLimit-Remaining") ? undefined :
+					response.headers.get("X-RateLimit-Remaining") !== "0" ? Promise.resolve() :
+					timeout(Number.parseFloat(response.headers.get("X-RateLimit-Reset-After")!)*1000, options?.signal);
 
 				let data: T | undefined = undefined;
 				if (abortIfFail && !response.ok) {

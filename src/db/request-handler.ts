@@ -151,12 +151,12 @@ SELECT 1 FROM latest_member_snapshots WHERE _user_id = :_user_id AND _guild_id =
 SELECT _timestamp FROM latest_member_snapshots WHERE _user_id = :_user_id AND _guild_id = :_guild_id;
 `),
 			addLatestSnapshot: db.prepare(`\
-INSERT INTO latest_member_snapshots (_user_id, _guild_id, _timestamp, nick, avatar, joined_at, roles, premium_since, pending, communication_disabled_until)
+INSERT INTO latest_member_snapshots (_user_id, _guild_id, _timestamp, nick, avatar, roles, joined_at, premium_since, pending, communication_disabled_until)
 VALUES (:_user_id, :_guild_id, :_timestamp, :nick, :avatar, :roles, :joined_at, :premium_since, :pending, :communication_disabled_until);
 `),
 			copyLatestSnapshot: db.prepare(`\
 INSERT INTO previous_member_snapshots (_user_id, _guild_id, _timestamp, nick, avatar, roles, joined_at, premium_since, pending, communication_disabled_until)
-SELECT _user_id, _guild_id, _timestamp, nick, avatar, :roles, joined_at, premium_since, pending, communication_disabled_until FROM latest_member_snapshots WHERE _user_id = :_user_id AND _guild_id = :_guild_id;
+SELECT _user_id, _guild_id, _timestamp, nick, avatar, roles, joined_at, premium_since, pending, communication_disabled_until FROM latest_member_snapshots WHERE _user_id = :_user_id AND _guild_id = :_guild_id;
 `),
 			replaceLatestSnapshot: db.prepare(`\
 UPDATE latest_member_snapshots SET _timestamp = :_timestamp, nick = :nick, avatar = :avatar, roles = :roles, joined_at = :joined_at, premium_since = :premium_since, pending = :pending, communication_disabled_until = :communication_disabled_until WHERE _user_id = :_user_id AND _guild_id = :_guild_id;
@@ -312,10 +312,12 @@ WHERE message_fts_index MATCH :$query;
 			}
 			case RequestType.ADD_MEMBER_LEAVE: {
 				response = addSnapshot(objectStatements.member, assignTiming({
+					_guild_id: BigInt(req.guildID),
 					_user_id: BigInt(req.userID),
-					joined_at: null,
 					nick: null,
 					avatar: null,
+					roles: null,
+					joined_at: null,
 					premium_since: null,
 					pending: null,
 					communication_disabled_until: null,

@@ -23,7 +23,9 @@ export const enum RequestType {
 	OPTIMIZE,
 	VACUUM,
 	ADD_USER_SNAPSHOT,
+	SYNC_GUILD_CHANNELS_AND_ROLES,
 	ADD_GUILD_SNAPSHOT,
+	SYNC_GUILD_MEMBERS,
 	ADD_MEMBER_SNAPSHOT,
 	ADD_MEMBER_LEAVE,
 	ADD_ROLE_SNAPSHOT,
@@ -55,6 +57,13 @@ export type AddUserSnapshotRequest = {
 	timing: Timing | null;
 	user: DT.APIUser;
 };
+export type SyncGuildChannelsAndRolesRequest = {
+	type: RequestType.SYNC_GUILD_CHANNELS_AND_ROLES;
+	timing: Timing;
+	guildID: bigint;
+	channelIDs: Set<bigint>;
+	roleIDs: Set<bigint>;
+};
 export type AddGuildSnapshotRequest = {
 	type: RequestType.ADD_GUILD_SNAPSHOT;
 	timing: Timing | null;
@@ -70,6 +79,12 @@ export type MarkRoleAsDeletedRequest = {
 	type: RequestType.MARK_ROLE_AS_DELETED;
 	timing: Timing;
 	id: DT.Snowflake;
+};
+export type SyncGuildMembersRequest = {
+	type: RequestType.SYNC_GUILD_MEMBERS;
+	timing: Timing;
+	guildID: bigint;
+	userIDs: Set<bigint>;
 };
 export type AddMemberSnapshotFromFullRequest = {
 	type: RequestType.ADD_MEMBER_SNAPSHOT;
@@ -179,9 +194,11 @@ export type SearchMessagesRequest = {
 export type SingleRequest =
 	CommandRequest |
 	AddUserSnapshotRequest |
+	SyncGuildChannelsAndRolesRequest |
 	AddGuildSnapshotRequest |
 	AddRoleSnapshotRequest |
 	MarkRoleAsDeletedRequest |
+	SyncGuildMembersRequest |
 	AddMemberSnapshotFromFullRequest |
 	AddMemberSnapshotFromPartialRequest |
 	AddMemberLeaveRequest |
@@ -206,9 +223,11 @@ export type IteratorRequest =
 export type ResponseFor<R extends SingleRequest> =
 	R extends CommandRequest ? void :
 	R extends AddUserSnapshotRequest ? AddSnapshotResult :
+	R extends SyncGuildChannelsAndRolesRequest ? void :
 	R extends AddGuildSnapshotRequest ? AddSnapshotResult :
 	R extends AddRoleSnapshotRequest ? AddSnapshotResult :
 	R extends MarkRoleAsDeletedRequest ? boolean :
+	R extends SyncGuildMembersRequest ? void :
 	R extends AddMemberSnapshotFromFullRequest ? AddSnapshotResult :
 	R extends AddMemberSnapshotFromPartialRequest ? AddSnapshotResult :
 	R extends AddMemberLeaveRequest ? AddSnapshotResult :

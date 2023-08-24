@@ -48,6 +48,7 @@ export type CachedGuild = {
 	rolePermissions: Map<string, bigint>;
 	accountData: Map<Account, GuildAccountData>;
 	textChannels: Map<string, CachedChannel>;
+	memberUserIDs: Set<bigint> | null;
 };
 
 export const guilds = new Map<string, CachedGuild>();

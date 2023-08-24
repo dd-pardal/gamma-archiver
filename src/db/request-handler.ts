@@ -41,30 +41,32 @@ export function getRequestHandler({ path, log }: { path: string; log?: typeof im
 
 	type ObjectStatements = {
 		/** Checks if there is at least one snapshot of the object archived. */
-		doesExist: Statement<any[]>;
+		doesExist: Statement;
 		/** Gets the latest snapshot by the `id` column or get all snapshots if `$getAll` is `1` */
-		getLatestSnapshot: Statement<any[]>;
+		getLatestSnapshot: Statement;
 		/** Checks if the snapshot properties of the latest snapshot are equal to those of the provided object. */
-		isLatestSnapshotEqual: Statement<any[]>;
+		isLatestSnapshotEqual: Statement;
 		/** Gets the _timestamp value. */
-		getTimestamp: Statement<any[]>;
+		getTimestamp: Statement;
 		/** Adds a snapshot to the table of latest snapshots. */
-		addLatestSnapshot: Statement<any[]>;
+		addLatestSnapshot: Statement;
 		/** Copies the latest snapshot to the table of the previous snapshots. */
-		copyLatestSnapshot: Statement<any[]>;
+		copyLatestSnapshot: Statement;
 		/** Modifies the snapshot properties of the latest snapshot. */
-		replaceLatestSnapshot: Statement<any[]>;
+		replaceLatestSnapshot: Statement;
 	};
 	/** Prepared statements for objects which can only be deleted once. */
 	type DeletableObjectStatements = ObjectStatements & {
 		/** Sets the _deleted timestamp. */
-		markAsDeleted: Statement<any[]>;
+		markAsDeleted: Statement;
 	};
 	type ChildObjectStatements = DeletableObjectStatements & {
 		/** Gets the latest snapshot for all child objects of a given parent */
-		getLatestSnapshotsByParentID: Statement<any[]>;
+		getLatestSnapshotsByParentID: Statement;
 		/** Counts the child objects of a given parent */
-		countObjectsByParentID: Statement<any[]>;
+		countObjectsByParentID: Statement;
+		/** Gets the IDs of all non-deleted objects */
+		getNotDeletedObjectIDsByParentID: Statement;
 	};
 
 	function getStatements(objectName: string, parentIDName: null, snapshotKeys: string[], objectKeys: string[]): DeletableObjectStatements;
@@ -105,12 +107,15 @@ UPDATE latest_${objectName}_snapshots SET _deleted = :_deleted WHERE id = :id;
 		if (parentIDName !== null) {
 			Object.assign(statements, {
 				getLatestSnapshotsByParentID: db.prepare(`\
-SELECT id, _deleted, ${ok} _timestamp, ${sk} FROM latest_${objectName}_snapshots WHERE ${parentIDName} IS :${parentIDName};
+SELECT id, _deleted, ${ok} _timestamp, ${sk} FROM latest_${objectName}_snapshots WHERE ${parentIDName} IS :$parentID;
 `),
 				countObjectsByParentID: db.prepare(`\
-SELECT count(*) FROM latest_${objectName}_snapshots WHERE ${parentIDName} IS :${parentIDName};
+SELECT count(*) FROM latest_${objectName}_snapshots WHERE ${parentIDName} IS :$parentID;
 `),
-			});
+				getNotDeletedObjectIDsByParentID: db.prepare(`\
+SELECT id FROM latest_${objectName}_snapshots WHERE ${parentIDName} IS :$parentID AND _deleted IS NULL;
+`),
+			} satisfies Omit<ChildObjectStatements, keyof DeletableObjectStatements>);
 		}
 		return statements;
 	}
@@ -165,6 +170,9 @@ SELECT _user_id, _guild_id, _timestamp, nick, avatar, roles, joined_at, premium_
 			replaceLatestSnapshot: db.prepare(`\
 UPDATE latest_member_snapshots SET _timestamp = :_timestamp, nick = :nick, avatar = :avatar, roles = :roles, joined_at = :joined_at, premium_since = :premium_since, pending = :pending, communication_disabled_until = :communication_disabled_until WHERE _user_id = :_user_id AND _guild_id = :_guild_id;
 `),
+			getNotLeftUserIDsByGuildID: db.prepare(`\
+SELECT _user_id FROM latest_member_snapshots WHERE _guild_id IS :_guild_id AND joined_at IS NOT NULL;
+`),
 		},
 		channel: getStatements("channel", "guild_id", ["position", "permission_overwrites", "name", "topic", "nsfw", "bitrate", "user_limit", "rate_limit_per_user", "icon", "owner_id", "parent_id", "rtc_region", "video_quality_mode", "thread_metadata__archived", "thread_metadata__auto_archive_duration", "thread_metadata__archive_timestamp", "thread_metadata__locked", "thread_metadata__invitable", "thread_metadata__create_timestamp", "default_auto_archive_duration", "flags", "default_reaction_emoji", "default_thread_rate_limit_per_user", "default_sort_order", "default_forum_layout"], ["guild_id", "type"]),
 		message: {
@@ -176,7 +184,7 @@ webhook_id, username, avatar
 FROM latest_message_snapshots
 LEFT JOIN webhook_users
 ON latest_message_snapshots.author__id < 281474976710656 AND webhook_users.internal_id = latest_message_snapshots.author__id
-WHERE channel_id = :channel_id OR :$getAll = 1;
+WHERE channel_id = :$parentID OR :$getAll = 1;
 `),
 			search: db.prepare(`\
 SELECT
@@ -255,6 +263,16 @@ WHERE message_fts_index MATCH :$query;
 		}
 	}
 
+	/** Marks as deleted all child objects of a specific parent whose IDs are not in a set. */
+	function syncDeletions(statements: ChildObjectStatements, parentID: bigint, ids: Set<bigint>, timestamp: bigint) {
+		const stored = statements.getNotDeletedObjectIDsByParentID.all({ $parentID: parentID }) as any[];
+		for (const { id } of stored) {
+			if (!ids.has(id)) {
+				statements.markAsDeleted.run({ id, _deleted: timestamp });
+			}
+		}
+	}
+
 	function getChanges(): bigint {
 		return (statements.getChanges.get() as any)["changes()"];
 	}
@@ -283,6 +301,12 @@ WHERE message_fts_index MATCH :$query;
 				statements.vacuum.run();
 				break;
 			}
+			case RequestType.SYNC_GUILD_CHANNELS_AND_ROLES: {
+				const timestamp = encodeTiming(req.timing);
+				syncDeletions(objectStatements.channel, req.guildID, req.channelIDs, timestamp);
+				syncDeletions(objectStatements.role, req.guildID, req.roleIDs, timestamp);
+				break;
+			}
 			case RequestType.ADD_USER_SNAPSHOT: {
 				const user = encodeObject(ObjectType.USER, req.user);
 				user.discriminator = req.user.discriminator === "0" ? null : req.user.discriminator;
@@ -305,6 +329,29 @@ WHERE message_fts_index MATCH :$query;
 					_deleted: encodeTiming(req.timing),
 				});
 				response = getChanges() > 0;
+				break;
+			}
+			case RequestType.SYNC_GUILD_MEMBERS: {
+				const timestamp = encodeTiming(req.timing);
+				const stored = objectStatements.member.getNotLeftUserIDsByGuildID.all({ _guild_id: req.guildID }) as any[];
+				const sqlParams = {
+					_guild_id: req.guildID,
+					_user_id: 0n,
+					_timestamp: timestamp,
+					nick: null,
+					avatar: null,
+					roles: null,
+					joined_at: null,
+					premium_since: null,
+					pending: null,
+					communication_disabled_until: null,
+				};
+				for (const { _user_id: userID } of stored) {
+					if (!req.userIDs.has(userID)) {
+						sqlParams._user_id = userID;
+						addSnapshot(objectStatements.member, sqlParams);
+					}
+				}
 				break;
 			}
 			case RequestType.ADD_MEMBER_SNAPSHOT: {
@@ -522,7 +569,7 @@ WHERE message_fts_index MATCH :$query;
 			}
 			case RequestType.GET_DM_CHANNELS: {
 				response = mapIterator(objectStatements.channel.getLatestSnapshotsByParentID.iterate({
-					guild_id: 0,
+					$parentID: 0n,
 				}) as IterableIterator<any>, (snapshot) => {
 					const channel = decodeObject(ObjectType.CHANNEL, snapshot);
 					channel.guild_id = undefined;
@@ -537,7 +584,7 @@ WHERE message_fts_index MATCH :$query;
 			}
 			case RequestType.GET_GUILD_CHANNELS: {
 				response = mapIterator(objectStatements.channel.getLatestSnapshotsByParentID.iterate({
-					guild_id: req.guildID,
+					$parentID: req.guildID,
 				}) as IterableIterator<any>, (snapshot) => {
 					const channel = decodeObject(ObjectType.CHANNEL, snapshot);
 					channel.guild_id = req.guildID;
@@ -552,13 +599,13 @@ WHERE message_fts_index MATCH :$query;
 			}
 			case RequestType.COUNT_CHANNEL_MESSAGES: {
 				response = (objectStatements.message.countObjectsByParentID.get({
-					channel_id: req.channelID,
+					$parentID: req.channelID,
 				}) as any)["count(*)"];
 				break;
 			}
 			case RequestType.GET_CHANNEL_MESSAGES: {
 				response = mapIterator(objectStatements.message.getLatestSnapshotsWithWHUsersByParentID.iterate({
-					channel_id: req.channelID,
+					$parentID: req.channelID,
 				}) as IterableIterator<any>, (snapshot) => {
 					const message = decodeObject(ObjectType.CHANNEL, snapshot);
 					message.edited_timestamp = message.edited_timestamp === 0 ? null : new Date(message.edited_timestamp).toISOString();

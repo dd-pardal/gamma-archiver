@@ -652,6 +652,7 @@ function connectAccount(options: AccountOptions): Promise<void> {
 							rolePermissions,
 							accountData: new Map(),
 							textChannels: new Map(),
+							memberUserIDs: new Set(),
 						};
 						cachedGuild.textChannels = new Map(
 							(payload.d.channels.filter(isChannelCacheable))
@@ -689,7 +690,17 @@ function connectAccount(options: AccountOptions): Promise<void> {
 						updateOutput();
 
 						db.transaction(async () => {
-							// TODO: Remove deleted roles and channels
+							db.request({
+								type: RequestType.SYNC_GUILD_CHANNELS_AND_ROLES,
+								guildID: BigInt(guild.id),
+								channelIDs: new Set(guild.channels.map(c => BigInt(c.id))),
+								roleIDs: new Set(guild.roles.map(r => BigInt(r.id))),
+								timing: {
+									timestamp,
+									realtime: false,
+								},
+							});
+
 							db.request({
 								type: RequestType.ADD_GUILD_SNAPSHOT,
 								guild,
@@ -738,7 +749,13 @@ function connectAccount(options: AccountOptions): Promise<void> {
 						cachedGuild = guilds.get(guild.id)!;
 					}
 
-					// TODO: Resync
+					if (allReady) {
+						const syncAccount = getLeastGatewayOccupiedAccount(cachedGuild.accountData.keys());
+						if (syncAccount !== undefined) {
+							syncAllGuildMembers(syncAccount, cachedGuild);
+						}
+						// TODO: Resync
+					}
 
 					break;
 				}
@@ -829,13 +846,31 @@ function connectAccount(options: AccountOptions): Promise<void> {
 							});
 						}
 					});
-					if (payload.d.chunk_index === payload.d.chunk_count - 1) {
-						const cachedGuild = guilds.get(payload.d.guild_id);
-						if (cachedGuild === undefined) {
-							log.warning?.("Received guild members chunk for an unknown guild.");
-						} else {
-							log.verbose?.(`Finished requesting guild members from ${cachedGuild.name} (${cachedGuild.id}) using ${account.name}.`);
+
+					const isLast = payload.d.chunk_index === payload.d.chunk_count - 1;
+					const cachedGuild = guilds.get(payload.d.guild_id);
+					if (cachedGuild === undefined) {
+						log.warning?.(`Received guild members chunk for an unknown guild with ID ${payload.d.guild_id}.`);
+					} else {
+						for (const member of payload.d.members) {
+							cachedGuild.memberUserIDs!.add(BigInt(member.user!.id));
 						}
+						if (isLast) {
+							log.verbose?.(`Finished requesting guild members from ${cachedGuild.name} (${cachedGuild.id}) using ${account.name}.`);
+							db.transaction(async () => {
+								db.request({
+									type: RequestType.SYNC_GUILD_MEMBERS,
+									guildID: BigInt(cachedGuild.id),
+									userIDs: cachedGuild.memberUserIDs!,
+									timing: {
+										timestamp,
+										realtime: false,
+									},
+								});
+							});
+						}
+					}
+					if (isLast) {
 						account.ongoingMemberRequests.delete(payload.d.guild_id);
 						account.numberOfOngoingGatewayOperations--;
 					}
@@ -1104,11 +1139,10 @@ function connectAccount(options: AccountOptions): Promise<void> {
 				account.ongoingMemberRequests.delete(guildID);
 
 				const guild = guilds.get(guildID);
-				if (guild === undefined) continue;
-				log.verbose?.(`Member request for guild ${guild.name} (${guildID}) was interrupted.`);
-				const syncAccount = getLeastGatewayOccupiedAccount(guild.accountData.keys());
-				if (syncAccount === undefined) continue;
-				syncAllGuildMembers(syncAccount, guild);
+				if (guild !== undefined) {
+					log.verbose?.(`Member request for guild ${guild.name} (${guildID}) was interrupted.`);
+					guild.memberUserIDs = null;
+				}
 			}
 		});
 

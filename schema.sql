@@ -307,7 +307,6 @@ CREATE TABLE latest_message_snapshots (
 	_attachment_ids BLOB -- ids of the attachments in the message, stored as 64-bit big-endian integers concatenated
 );
 CREATE INDEX message_by_channel_id ON latest_message_snapshots (channel_id);
-CREATE INDEX message_by_author_id ON latest_message_snapshots (author__id);
 CREATE VIRTUAL TABLE message_fts_index USING fts5(content, content=latest_message_snapshots, content_rowid=id, detail=full);
 -- Triggers to keep the FTS index up to date
 CREATE TRIGGER latest_message_snapshots_ai AFTER INSERT ON latest_message_snapshots BEGIN

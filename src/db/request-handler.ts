@@ -32,7 +32,11 @@ export function getRequestHandler({ path, log }: { path: string; log?: typeof im
 	db.pragma("foreign_keys = ON");
 
 	if (db.pragma("user_version", { simple: true }) === 0n) {
-		db.exec(fs.readFileSync("schema.sql", "utf-8"));
+		db.exec(
+			fs.readFileSync(new URL("../../schema.sql", import.meta.url), "utf-8")
+				// Remove comments and unnecessary whitespace
+				.replace(/(?:\s|--.*)+/g, " ")
+		);
 	}
 
 	type ObjectStatements = {

@@ -47,6 +47,9 @@ const args = {
 		"no-sync": {
 			type: "boolean",
 		},
+		"no-reactions": {
+			type: "boolean",
+		},
 	},
 } satisfies ParseArgsConfig;
 
@@ -77,7 +80,7 @@ try {
 	}
 } catch {
 	console.error("\
-Usage: node ./build/archiver/index.js --token <token> [--log (error | warning | info | verbose | debug)] [--stats (yes | no | auto)] [(--guild <guild id>)…] [--no-sync] <database path>");
+Usage: node ./build/archiver/index.js --token <token> [--log (error | warning | info | verbose | debug)] [--stats (yes | no | auto)] [(--guild <guild id>)…] [--no-sync] [--no-reactions] <database path>");
 	process.exit(1);
 }
 
@@ -188,12 +191,18 @@ export async function syncMessages(account: Account, channel: CachedChannel | Th
 		updateOutput();
 
 		const lastMessageIDNum = lastMessageID != null ? Number.parseInt(lastMessageID) : null;
-		let firstMessageIDNum;
-
-		let done = false;
+		let firstMessageIDNum: number | undefined;
 
 		let messageID = lastStoredMessageID?.toString() ?? "0";
-		while (!done) {
+
+		function updateProgress(currentID: string, count: number) {
+			progress.progress = lastMessageIDNum === null ? null : (Number.parseInt(currentID) - firstMessageIDNum!) / (lastMessageIDNum - firstMessageIDNum!);
+			messagesArchived += count;
+			updateOutput();
+		}
+
+		main:
+		while (true) {
 			try {
 				const { response, data, rateLimitReset } = await account.request<DBT.APIMessage[]>(`/channels/${channel.id}/messages?limit=100&after=${messageID}`, restOptions, true);
 				if (abortController.signal.aborted) break;
@@ -210,33 +219,131 @@ export async function syncMessages(account: Account, channel: CachedChannel | Th
 				const messages = data!;
 
 				if (messages.length > 0) {
-					done = await db.transaction(async () => {
-						if (abortController.signal.aborted) return false;
-						for (let i = messages.length - 1; i >= 1; i--) {
-							db.request({
-								type: RequestType.ADD_MESSAGE_SNAPSHOT,
-								partial: false,
-								message: messages[i],
+					// Messages must be added from oldest to newest so that the program can detect
+					// which messages need to be archived solely based on the ID of the last archived message.
+					// Every message with reactions is added on it own transaction. Messages without
+					// reactions are grouped together in a single transaction to improve performance.
+
+					firstMessageIDNum ??= Number.parseInt(messages.at(-1)!.id);
+					messageID = messages[0].id;
+
+					let lastMessageAddPromise: Promise<AddSnapshotResult>;
+					let rateLimitReset: Promise<void> | undefined;
+					let i: number;
+					let startMWRIndex: number = messages.length - 1;
+
+					function flushMessagesWithoutReactions() {
+						if (startMWRIndex === i) return;
+						// Since the message array is iterated in reverse, startIndex > endIndex.
+						const startIndex = startMWRIndex; // inclusive
+						const endIndex = i; // exclusive
+						updateProgress(messages[endIndex + 1].id, startIndex - endIndex);
+						db.transaction(async () => {
+							for (let j = startIndex; j > endIndex; j--) {
+								lastMessageAddPromise = db.request({
+									type: RequestType.ADD_MESSAGE_SNAPSHOT,
+									partial: false,
+									message: messages[j],
+								});
+							}
+						});
+					}
+
+					for (i = messages.length - 1; i >= 0; i--) {
+						const message = messages[i];
+						if (!options["no-reactions"] && message.reactions !== undefined && message.reactions.length !== 0) {
+							flushMessagesWithoutReactions();
+							startMWRIndex = i - 1;
+
+							const reactions: {
+								emoji: DBT.APIPartialEmoji;
+								reactionType: 0 | 1;
+								userIDs: string[];
+							}[] = [];
+
+							for (const reaction of message.reactions) {
+								for (const [reactionType, expectedCount] of [
+									...(reaction.count_details.normal > 0 ? [[0, reaction.count_details.normal]] : []),
+									...(reaction.count_details.burst > 0 ? [[1, reaction.count_details.burst]] : []),
+								] as [0 | 1, number][]) {
+									const reactionData = {
+										emoji: reaction.emoji,
+										reactionType,
+										userIDs: new Array<string>(expectedCount),
+									};
+									let i = 0;
+									const emoji = reaction.emoji.id === null ? reaction.emoji.name : `${reaction.emoji.name}:${reaction.emoji.id}`;
+
+									let userID = "0";
+									while (true) {
+										await rateLimitReset;
+										let response, data;
+										({ response, data, rateLimitReset } = await account.request<DBT.APIUser[]>(`/channels/${channel.id}/messages/${message.id}/reactions/${emoji}?limit=100&type=${reactionType}&after=${userID}`, restOptions, true));
+										if (abortController.signal.aborted as boolean) break main;
+										if (response.status === 403 || response.status === 404) {
+											// TODO: Maybe not ideal?
+											log.verbose?.(`Hanging message sync from #${channel.name} (${channel.id}) using ${account.name} because we got a ${response.status} ${response.statusText} response.`);
+											await waitForAbort(abortController.signal);
+											throw abortError;
+										} else if (!response.ok) {
+											log.warning?.(`Stopped syncing messages from #${channel.name} (${channel.id}) using ${account.name} because we got a ${response.status} ${response.statusText} response.`);
+											break main;
+										}
+										const users = data!;
+
+										for (const user of users) {
+											reactionData.userIDs[i] = user.id;
+											i++;
+										}
+
+										if (users.length < 100) {
+											break;
+										}
+										userID = data!.at(-1)!.id;
+									}
+									reactions.push(reactionData);
+
+									if (i !== expectedCount) {
+										log.verbose?.(`The reaction count (${expectedCount}) is different from the length of the list (${i}) of users who reacted to the message with ID ${message.id} from #${channel.name} (${channel.id}).`);
+									}
+								}
+							}
+
+							db.transaction(async () => {
+								lastMessageAddPromise = db.request({
+									type: RequestType.ADD_MESSAGE_SNAPSHOT,
+									partial: false,
+									message,
+								});
+								for (const reactionData of reactions) {
+									db.request({
+										type: RequestType.ADD_INITIAL_REACTIONS,
+										messageID: message.id,
+										emoji: reactionData.emoji,
+										reactionType: reactionData.reactionType,
+										userIDs: reactionData.userIDs,
+										timing: null,
+									});
+								}
 							});
+
+							updateProgress(message.id, 1);
 						}
-						return await db.request({
-							type: RequestType.ADD_MESSAGE_SNAPSHOT,
-							partial: false,
-							message: messages[0],
-						}) !== AddSnapshotResult.ADDED_FIRST_SNAPSHOT;
-					});
+					}
+					flushMessagesWithoutReactions();
+
+					// Since there is at least 1 message, the promise variable will always be defined
+					const done = await lastMessageAddPromise! !== AddSnapshotResult.ADDED_FIRST_SNAPSHOT;
+
 					if (done) {
 						// The last message was already in the database, so we reached the
 						// point where we started getting messages from the gateway.
 						log.verbose?.(`Finished syncing messages from #${channel.name} (${channel.id}) because a known message (${messages[0].id}) was found.`);
+						break;
 					}
+				}
 
-					firstMessageIDNum ??= Number.parseInt(messages.at(-1)!.id);
-					messageID = messages[0].id;
-					progress.progress = lastMessageIDNum === null ? null : (Number.parseInt(messageID) - firstMessageIDNum) / (lastMessageIDNum - firstMessageIDNum);
-					messagesArchived += messages.length;
-					updateOutput();
-				} else if (messages.length < 100) {
+				if (messages.length < 100) {
 					log.verbose?.(`Finished syncing messages from #${channel.name} (${channel.id}) using ${account.name}.`);
 					progress.progress = 1;
 					updateOutput();
@@ -506,7 +613,6 @@ function connectAccount(options: AccountOptions): Promise<void> {
 			log.verbose?.(`${wasConnected ? "Gateway connection lost" : "Failed to connect to the gateway"} (code: ${code}) using ${account.name}.`);
 		});
 
-		// TODO: Archive attachments and roles
 		gatewayConnection.addListener("dispatch", async (payload: DBT.GatewayReceivePayload, realtime: boolean) => {
 			const timestamp = Date.now();
 			const timing = {
@@ -519,7 +625,7 @@ function connectAccount(options: AccountOptions): Promise<void> {
 						id: payload.d.user.id,
 						tag: getTag(payload.d.user),
 					};
-					log.info?.(`Gateway connection ready for ${account.name}.`);
+					log.info?.(`Gateway connection ready for ${account.name} (${account.details.tag}).`);
 					numberOfGuildsLeft = payload.d.guilds.length;
 					break;
 				}
@@ -583,6 +689,7 @@ function connectAccount(options: AccountOptions): Promise<void> {
 						updateOutput();
 
 						db.transaction(async () => {
+							// TODO: Remove deleted roles and channels
 							db.request({
 								type: RequestType.ADD_GUILD_SNAPSHOT,
 								guild,
@@ -630,6 +737,8 @@ function connectAccount(options: AccountOptions): Promise<void> {
 					} else {
 						cachedGuild = guilds.get(guild.id)!;
 					}
+
+					// TODO: Resync
 
 					break;
 				}
@@ -940,6 +1049,50 @@ function connectAccount(options: AccountOptions): Promise<void> {
 					});
 					break;
 				}
+
+				case DBT.GatewayDispatchEvents.MessageReactionAdd: {
+					db.transaction(async () => {
+						db.request({
+							type: RequestType.ADD_REACTION_PLACEMENT,
+							messageID: payload.d.message_id,
+							emoji: payload.d.emoji,
+							reactionType: payload.d.burst ? 1 : 0,
+							userID: payload.d.user_id,
+							timing,
+						});
+					});
+					break;
+				}
+				case DBT.GatewayDispatchEvents.MessageReactionRemove: {
+					db.transaction(async () => {
+						db.request({
+							type: RequestType.MARK_REACTION_AS_REMOVED,
+							messageID: payload.d.message_id,
+							emoji: payload.d.emoji,
+							reactionType: payload.d.burst ? 1 : 0,
+							userID: payload.d.user_id,
+							timing,
+						});
+					});
+					break;
+				}
+				case DBT.GatewayDispatchEvents.MessageReactionRemoveEmoji:
+				case DBT.GatewayDispatchEvents.MessageReactionRemoveAll:
+				{
+					db.transaction(async () => {
+						db.request({
+							type: RequestType.MARK_REACTIONS_AS_REMOVED_BULK,
+							messageID: payload.d.message_id,
+							emoji: payload.t === DBT.GatewayDispatchEvents.MessageReactionRemoveEmoji ? payload.d.emoji : null,
+							timing,
+						});
+					});
+					break;
+				}
+				case "MESSAGE_REACTION_ADD_MANY" as any: {
+					log.warning?.("WARNING: Received a MESSAGE_REACTION_ADD_MANY gateway event: %o", payload.d);
+					break;
+				}
 			}
 		});
 
@@ -1065,7 +1218,13 @@ Promise.all(options.token.map((token, index) => connectAccount({
 	mode: "bot",
 	token,
 	gatewayIdentifyData: {
-		intents: DBT.GatewayIntentBits.Guilds | DBT.GatewayIntentBits.GuildMessages | DBT.GatewayIntentBits.DirectMessages | DBT.GatewayIntentBits.GuildMembers,
+		intents:
+			DBT.GatewayIntentBits.Guilds |
+			DBT.GatewayIntentBits.GuildMessages |
+			DBT.GatewayIntentBits.GuildMessageReactions |
+			DBT.GatewayIntentBits.DirectMessages |
+			DBT.GatewayIntentBits.DirectMessageReactions |
+			DBT.GatewayIntentBits.GuildMembers,
 		properties: {
 			os: process.platform,
 			browser: "GammaArchiver/0.1.1",

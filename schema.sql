@@ -8,7 +8,7 @@
 --     of the object when it was created (e.g. message with edited_timestamp === null or snapshot
 --     taken in reaction to a create event).
 --   * _deleted: Contains the UNIX timestamp of when the first snapshot where the object was found
---     to be deleted wa taken in bits 1-63 and the least significant bit indicates if the
+--     to be deleted was taken in bits 1-63 and the least significant bit indicates if the
 --     deletion was caught in a gateway event. NULL if it wasn't deleted.
 
 BEGIN;
@@ -333,7 +333,7 @@ CREATE TABLE previous_message_snapshots (
 
 -- This table does not represent a Discord object. It's used to avoid repetition.
 CREATE TABLE webhook_users (
-	id INTEGER NOT NULL PRIMARY KEY,
+	internal_id INTEGER NOT NULL PRIMARY KEY,
 	webhook_id INTEGER NOT NULL,
 	username TEXT NOT NULL,
 	avatar BLOB,
@@ -355,6 +355,22 @@ CREATE TABLE attachments (
 	duration_secs REAL, -- the duration of the audio file (currently for voice messages)
 	waveform BLOB, -- byte array representing a sampled waveform, decoded from Base64 (currently for voice messages)
 	flags INTEGER -- attachment flags combined as a bitfield
+);
+
+CREATE TABLE reactions (
+	message_id INTEGER NOT NULL REFERENCES latest_message_snapshots (id),
+	emoji, -- internal ID from reaction_emojis (INTEGER) or Unicode emoji (TEXT)
+	type INTEGER NOT NULL, -- 0 for normal reactions, 1 for super reactions
+	user_id INTEGER NOT NULL,
+	start INTEGER NOT NULL, -- when this reaction was added, in _timestamp format, or 0 if the reaction was already there when the message was first archived
+	end INTEGER -- when this reaction was removed, in _timestamp format, or NULL if it wasn't
+);
+CREATE INDEX reaction_index ON reactions (message_id, emoji, type);
+
+CREATE TABLE reaction_emojis (
+	id INTEGER NOT NULL PRIMARY KEY,
+	name TEXT,
+	animated INTEGER NOT NULL
 );
 
 

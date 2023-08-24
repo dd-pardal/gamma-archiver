@@ -301,17 +301,27 @@ export function decodeSnowflakeArray(buf: Uint8Array): string[] {
 // It probably isn't possible to create them with an unmodified client but it seems that the
 // servers don't check that only one property is set.
 export type DiscordEmoji = { emoji_id: string; emoji_name: null } | { emoji_id: null; emoji_name: string };
-export function encodeEmoji(emoji: DiscordEmoji): bigint | string {
-	if (emoji.emoji_id != null)
-		return BigInt(emoji.emoji_id);
-	else
-		return emoji.emoji_name;
+export function encodeEmojiProps(emoji: DiscordEmoji): bigint | string {
+	return encodeEmoji({ id: emoji.emoji_id, name: emoji.emoji_name } as DBT.APIPartialEmoji);
 }
-export function decodeEmoji(data: bigint | string): DiscordEmoji {
-	if (typeof data === "bigint")
-		return { emoji_id: String(data), emoji_name: null };
+export function decodeEmojiProps(data: bigint | string): DiscordEmoji {
+	const emoji = decodeEmoji(data);
+	return {
+		emoji_id: emoji.id,
+		emoji_name: emoji.name,
+	} as DiscordEmoji;
+}
+export function encodeEmoji(emoji: DBT.APIPartialEmoji): bigint | string {
+	if (emoji.id != null)
+		return BigInt(emoji.id);
 	else
-		return { emoji_id: null, emoji_name: data };
+		return emoji.name;
+}
+export function decodeEmoji(data: bigint | string): DBT.APIPartialEmoji {
+	if (typeof data === "bigint")
+		return { id: String(data), name: null };
+	else
+		return { id: null, name: data };
 }
 
 export function encodePermissionOverwrites(overwrites: DBT.APIOverwrite[]): Uint8Array {
@@ -382,7 +392,7 @@ function encodeValue(type: ValueType, nullValue: NullValue | undefined, value: a
 		case ValueType.TIMESTAMP:
 			return new Date(value).getTime();
 		case ValueType.EMOJI:
-			return encodeEmoji(value);
+			return encodeEmojiProps(value);
 		case ValueType.JSON:
 			return JSON.stringify(value);
 		case ValueType.NULL:
@@ -418,7 +428,7 @@ function decodeValue(type: ValueType, nullValue: NullValue | undefined, value: a
 			// More accurate (sometimes) version:
 			// return new Date(value).toISOString().slice(0, -1) + "000+00:00";
 		case ValueType.EMOJI:
-			return decodeEmoji(value);
+			return decodeEmojiProps(value);
 		case ValueType.JSON:
 			return JSON.parse(value);
 		case ValueType.NULL:

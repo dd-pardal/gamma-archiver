@@ -32,6 +32,10 @@ export const enum RequestType {
 	MARK_CHANNEL_AS_DELETED,
 	ADD_MESSAGE_SNAPSHOT,
 	MARK_MESSAGE_AS_DELETED,
+	ADD_INITIAL_REACTIONS,
+	ADD_REACTION_PLACEMENT,
+	MARK_REACTION_AS_REMOVED,
+	MARK_REACTIONS_AS_REMOVED_BULK,
 	GET_LAST_MESSAGE_ID,
 	GET_GUILDS,
 	GET_DM_CHANNELS,
@@ -114,6 +118,35 @@ export type MarkMessageAsDeletedRequest = {
 	timing: Timing;
 	id: DT.Snowflake;
 };
+export type AddInitialReactionsRequest = {
+	type: RequestType.ADD_INITIAL_REACTIONS;
+	messageID: DT.Snowflake;
+	emoji: DT.APIPartialEmoji;
+	reactionType: 0 | 1;
+	userIDs: DT.Snowflake[];
+};
+export type AddReactionPlacementRequest = {
+	type: RequestType.ADD_REACTION_PLACEMENT;
+	messageID: DT.Snowflake;
+	emoji: DT.APIPartialEmoji;
+	reactionType: 0 | 1;
+	userID: DT.Snowflake;
+	timing: Timing;
+};
+export type MarkReactionAsRemovedRequest = {
+	type: RequestType.MARK_REACTION_AS_REMOVED;
+	messageID: DT.Snowflake;
+	emoji: DT.APIPartialEmoji;
+	reactionType: 0 | 1;
+	userID: DT.Snowflake;
+	timing: Timing;
+};
+export type MarkReactionAsRemovedBulkRequest = {
+	type: RequestType.MARK_REACTIONS_AS_REMOVED_BULK;
+	messageID: DT.Snowflake;
+	emoji: DT.APIPartialEmoji | null;
+	timing: Timing;
+};
 export type GetLastMessageIDRequest = {
 	type: RequestType.GET_LAST_MESSAGE_ID;
 	channelID: DT.Snowflake;
@@ -157,6 +190,10 @@ export type SingleRequest =
 	AddMessageSnapshotFromFullRequest |
 	AddMessageSnapshotFromPartialRequest |
 	MarkMessageAsDeletedRequest |
+	AddInitialReactionsRequest |
+	AddReactionPlacementRequest |
+	MarkReactionAsRemovedRequest |
+	MarkReactionAsRemovedBulkRequest |
 	GetLastMessageIDRequest |
 	CountChannelMessagesRequest;
 export type IteratorRequest =
@@ -167,7 +204,6 @@ export type IteratorRequest =
 	SearchMessagesRequest;
 
 export type ResponseFor<R extends SingleRequest> =
-	// eslint-disable-next-line @typescript-eslint/no-invalid-void-type
 	R extends CommandRequest ? void :
 	R extends AddUserSnapshotRequest ? AddSnapshotResult :
 	R extends AddGuildSnapshotRequest ? AddSnapshotResult :
@@ -181,6 +217,10 @@ export type ResponseFor<R extends SingleRequest> =
 	R extends AddMessageSnapshotFromFullRequest ? AddSnapshotResult :
 	R extends AddMessageSnapshotFromPartialRequest ? AddSnapshotResult :
 	R extends MarkMessageAsDeletedRequest ? boolean :
+	R extends AddInitialReactionsRequest ? void :
+	R extends AddReactionPlacementRequest ? void :
+	R extends MarkReactionAsRemovedRequest ? void :
+	R extends MarkReactionAsRemovedBulkRequest ? void :
 	R extends GetLastMessageIDRequest ? bigint | null :
 	R extends CountChannelMessagesRequest ? bigint | null :
 	never;

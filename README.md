@@ -5,7 +5,7 @@
 
 ## <!-- OwO --> What’s this?
 
-Gamma Archiver is a program that archives data from Discord, including users, members, servers, roles, channels, threads and messages (called “objects” from now on). It's designed to handle large amounts of data and can use multiple accounts at the same time.
+Gamma Archiver is a program that archives data from Discord, including users, members, servers, roles, channels, threads and messages (called “objects” from now on). It’s designed to handle large amounts of data and can use multiple accounts at the same time.
 
 The archiver can archive already-created objects (e.g. message history) and also new objects as soon as they’re created. It archives past messages from multiple channels concurrently, allowing it to easily archive thousands of messages per second if there are enough channels, up to a theoretical maximum of 5000 messages per account per second. It records all changes to objects, allowing you to see how any server looked like at any point in time. Information is never deleted from the database, so past versions of objects and deleted objects are still viewable.
 
@@ -37,7 +37,7 @@ By default, the archiver archives data from every place every account has access
 Usage:
 
 ```
-node ./build/archiver/index.js --token <token> [--log (error | warning | info | verbose | debug)] [--stats (yes | no | auto)] [(--guild <guild id>)…] [--no-sync] <database path>
+node ./build/archiver/index.js --token <token> [--log (error | warning | info | verbose | debug)] [--stats (yes | no | auto)] [(--guild <guild id>)…] [--no-sync] [--no-reactions] <database path>
 ```
 
 Options:
@@ -47,9 +47,10 @@ Options:
 - `--stats (yes | no | auto)`: Enables/disables showing sync statistics.
   - `yes`: Always output statistics to standard output
   - `no`: Never output statistics to standard output
-  - `auto`: Output statistics to standard output if it is connected to a terminal/console.
+  - `auto`: Output statistics to standard output if it is connected to a terminal/console
 - `--guild <guild id>`: Restricts archiving to specific servers. You can specify this option more than once to archive more than one servers. If this option is missing, all available servers will be archived. Currently, this option only prevents the program from actively requesting information about other guilds (syncing). Information passively sent by Discord via the gateway (realtime archiving) is still stored.
 - `--no-sync`: Prevents requesting past messages, archived threads and guild members.
+- `--no-reactions`: Prevents archiving who reacted to messages. Reaction counts won’t be archived.
 
 Example:
 
@@ -59,11 +60,19 @@ node ./build/archiver/index.js --token "Bot abc.def.ghi" --log verbose --guild 1
 
 ### Logging
 
-There are 5 logging levels: `error`, `warning`, `info`, `verbose` and `debug`. You can set the max level using the `--log` option. For example, `--log verbose` makes the program will log all `error`, `warning`, `info` and `verbose` messages, but not `debug` ones. The default max level is `info`, which is rather quiet. If you want to see what the archiver is doing, use `--log verbose`. The `debug` level shows most data sent to and received from Discord and the operations performed on the database; it is rarely useful except for debugging the archiver.
+All logs are sent to standard error. There are 5 logging levels:
+
+- `error`: unexpected events requiring immediate user attention
+- `warning`: events that can cause problems (i.e. events that cause the database to become out of sync)
+- `info`: relevant informative messages
+- `verbose`: less relevant informative messages
+- `debug`: most data sent to and received from Discord and all operations performed on the database; rarely useful except for debugging the archiver
+
+You can set the maximum level using the `--log` option. For example, `--log verbose` makes the program will log all `error`, `warning`, `info` and `verbose` messages, but not `debug` ones. The default maximum level is `info`, which is rather quiet. If you want to see what the archiver is doing, use `--log verbose`.
 
 ## Searching
 
-There's also a program that allows you to search messages in the database. You can use it both while the archiver is running and when it is not.
+There’s also a program that allows you to search messages in the database. You can use it both while the archiver is running and when it is not.
 
 Usage:
 
@@ -103,7 +112,7 @@ You can read the raw data from the database using the SQLite CLI or any SQLite d
     - [ ] From forum channels
     - [x] Attachments
       - [ ] Download attachments
-    - [ ] Reactions
+    - [x] Reactions
   - [ ] Export all data to plaintext
   - [ ] Allow thread enumeration to be interrupted
   - [ ] Fix switching accounts on permission changes (or remove multi-account support)

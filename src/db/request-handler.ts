@@ -7,9 +7,9 @@
 // TODO: Consider separating the encoding logic
 import * as fs from "node:fs";
 import * as DBT from "discord-user-api-types/v9";
-import { default as SQLite, Statement } from "better-sqlite3";
+import { default as SQLite, Statement, SqliteError } from "better-sqlite3";
 import { SingleRequest, ResponseFor, Timing, RequestType, IteratorRequest, IteratorResponseFor, GetGuildChannelsRequest, GetDMChannelsRequest, GetChannelMessagesRequest, AddSnapshotResult } from "./types.js";
-import { encodeSnowflakeArray, encodeObject, ObjectType, encodeImageHash, decodeObject, encodePermissionOverwrites, decodePermissionOverwrites, decodeImageHash } from "./generic-encoding.js";
+import { encodeSnowflakeArray, encodeObject, ObjectType, encodeImageHash, decodeObject, encodePermissionOverwrites, decodePermissionOverwrites, decodeImageHash, encodeEmoji } from "./generic-encoding.js";
 import { mapIterator } from "../util/iterators.js";
 
 export type RequestHandler = {
@@ -117,11 +117,19 @@ SELECT count(*) FROM latest_${objectName}_snapshots WHERE ${parentIDName} IS :${
 		vacuum: db.prepare("VACUUM;"),
 		getChanges: db.prepare("SELECT changes();"),
 
-		findWebhookUserID: db.prepare("SELECT id FROM webhook_users WHERE webhook_id IS :webhook_id AND username IS :username AND avatar IS :avatar;"),
+		findWebhookUserID: db.prepare("SELECT internal_id FROM webhook_users WHERE webhook_id IS :webhook_id AND username IS :username AND avatar IS :avatar;"),
 		addWebhookUser: db.prepare("INSERT INTO webhook_users (webhook_id, username, avatar) VALUES (:webhook_id, :username, :avatar);"),
-		getWebhookUser: db.prepare("SELECT webhook_id, username, avatar FROM webhook_users WHERE id = :id;"),
+		getWebhookUser: db.prepare("SELECT webhook_id, username, avatar FROM webhook_users WHERE internal_id = :internal_id;"),
 
 		addAttachment: db.prepare("INSERT OR IGNORE INTO attachments (id, _message_id, filename, description, content_type, size, height, width, ephemeral, duration_secs, waveform) VALUES (:id, :_message_id, :filename, :description, :content_type, :size, :height, :width, :ephemeral, :duration_secs, :waveform);"),
+
+		// findReactionEmoji: db.prepare("SELECT internal_id FROM reaction_emojis WHERE id IS :id;"),
+		addReactionEmoji: db.prepare("INSERT OR IGNORE INTO reaction_emojis (id, name, animated) VALUES (:id, :name, :animated);"),
+		addReactionPlacement: db.prepare("INSERT INTO reactions (message_id, emoji, type, user_id, start, end) VALUES (:message_id, :emoji, :type, :user_id, :start, NULL);"),
+		markReactionAsRemoved: db.prepare("UPDATE reactions SET end = :end WHERE message_id IS :message_id AND emoji IS :emoji AND type IS :type AND user_id IS :user_id AND end IS NULL;"),
+		markReactionsAsRemovedByMessage: db.prepare("UPDATE reactions SET end = :end WHERE message_id IS :message_id AND end IS NULL;"),
+		markReactionsAsRemovedByMessageAndEmoji: db.prepare("UPDATE reactions SET end = :end WHERE message_id IS :message_id AND emoji IS :emoji AND end IS NULL;"),
+		checkForReaction: db.prepare("SELECT 1 FROM reactions WHERE message_id IS :message_id AND emoji IS :emoji AND type IS :type AND user_id IS :user_id AND end IS NULL;"),
 
 		getLastMessageID: db.prepare("SELECT max(id) FROM latest_message_snapshots WHERE channel_id = :channel_id;"),
 	} as const;
@@ -163,7 +171,7 @@ channel_id, author__id, tts, mention_everyone, mention_roles, type, activity__ty
 webhook_id, username, avatar
 FROM latest_message_snapshots
 LEFT JOIN webhook_users
-ON latest_message_snapshots.author__id < 281474976710656 AND webhook_users.id = latest_message_snapshots.author__id
+ON latest_message_snapshots.author__id < 281474976710656 AND webhook_users.internal_id = latest_message_snapshots.author__id
 WHERE channel_id = :channel_id OR :$getAll = 1;
 `),
 			search: db.prepare(`\
@@ -177,7 +185,7 @@ SELECT
 FROM message_fts_index
 JOIN latest_message_snapshots ON latest_message_snapshots.id = message_fts_index.rowid
 LEFT JOIN latest_user_snapshots ON latest_user_snapshots.id = latest_message_snapshots.author__id
-LEFT JOIN webhook_users ON latest_message_snapshots.author__id < 281474976710656 AND webhook_users.id = latest_message_snapshots.author__id
+LEFT JOIN webhook_users ON latest_message_snapshots.author__id < 281474976710656 AND webhook_users.internal_id = latest_message_snapshots.author__id
 LEFT JOIN latest_channel_snapshots channel ON channel.id = latest_message_snapshots.channel_id
 LEFT JOIN latest_channel_snapshots parent_channel ON (channel.type BETWEEN 10 AND 12) AND parent_channel.id = channel.parent_id
 LEFT JOIN latest_guild_snapshots ON latest_guild_snapshots.id = channel.guild_id OR latest_guild_snapshots.id = parent_channel.guild_id
@@ -205,7 +213,6 @@ WHERE message_fts_index MATCH :$query;
 	 * Adds a snapshot of an object to the database.
 	 * @param partial If `true`, get the properties missing in `object` from the latest recorded snapshot
 	 * @param checkIfChanged If `true`, prevent recording a snapshot that is equal to the latest snapshot
-	 * @returns `true` if there were no previous snapshots for this object
 	 */
 	function addSnapshot(statements: ObjectStatements, object: any, partial = false, checkIfChanged = true): AddSnapshotResult {
 		if (partial) {
@@ -226,7 +233,7 @@ WHERE message_fts_index MATCH :$query;
 			}
 			object = Object.assign(oldObject, object);
 		} else {
-			if (!statements.doesExist.get(object)) {
+			if (statements.doesExist.get(object) === undefined) {
 				statements.addLatestSnapshot.run(object);
 				return AddSnapshotResult.ADDED_FIRST_SNAPSHOT;
 			}
@@ -353,7 +360,7 @@ WHERE message_fts_index MATCH :$query;
 							username: req.message.author.username,
 							avatar: req.message.author.avatar == null ? null : encodeImageHash(req.message.author.avatar),
 						};
-						msg.author__id = (statements.findWebhookUserID.get(webhookUser) as any)?.id ?? statements.addWebhookUser.run(webhookUser).lastInsertRowid;
+						msg.author__id = (statements.findWebhookUserID.get(webhookUser) as any)?.internal_id ?? statements.addWebhookUser.run(webhookUser).lastInsertRowid;
 					}
 					if (req.message.message_reference == null) {
 						msg.message_reference__message_id = null;
@@ -421,6 +428,77 @@ WHERE message_fts_index MATCH :$query;
 				response = getChanges() > 0;
 				break;
 			}
+
+			case RequestType.ADD_INITIAL_REACTIONS: {
+				const emoji = encodeEmoji(req.emoji);
+				if (req.emoji.id) {
+					statements.addReactionEmoji.run({
+						id: req.emoji.id,
+						name: req.emoji.name,
+						animated: req.emoji.animated ? 1n : 0n,
+					});
+				}
+				for (const userID of req.userIDs) {
+					statements.addReactionPlacement.run({
+						message_id: req.messageID,
+						emoji,
+						type: req.reactionType,
+						user_id: userID,
+						start: 0n,
+					});
+				}
+				break;
+			}
+			case RequestType.ADD_REACTION_PLACEMENT: {
+				const emoji = encodeEmoji(req.emoji);
+				if (statements.checkForReaction.get({
+					message_id: req.messageID,
+					emoji,
+					type: req.reactionType,
+					user_id: req.userID,
+				}) === undefined) {
+					try {
+						statements.addReactionPlacement.run({
+							message_id: req.messageID,
+							emoji,
+							type: req.reactionType,
+							user_id: req.userID,
+							start: encodeTiming(req.timing),
+						});
+					} catch (err) {
+						if (!(err instanceof SqliteError && err.code === "SQLITE_CONSTRAINT_FOREIGNKEY")) {
+							throw err;
+						}
+					}
+				}
+				break;
+			}
+			case RequestType.MARK_REACTION_AS_REMOVED: {
+				statements.markReactionAsRemoved.run({
+					message_id: req.messageID,
+					emoji: encodeEmoji(req.emoji),
+					type: req.reactionType,
+					user_id: req.userID,
+					end: encodeTiming(req.timing),
+				});
+				break;
+			}
+			case RequestType.MARK_REACTIONS_AS_REMOVED_BULK: {
+				if (req.emoji === null) {
+					statements.markReactionsAsRemovedByMessage.run({
+						message_id: req.messageID,
+						end: encodeTiming(req.timing),
+					});
+				} else {
+					statements.markReactionsAsRemovedByMessage.run({
+						message_id: req.messageID,
+						emoji: encodeEmoji(req.emoji),
+						end: encodeTiming(req.timing),
+					});
+				}
+				break;
+			}
+
 			case RequestType.GET_LAST_MESSAGE_ID: {
 				response = (statements.getLastMessageID.get({
 					channel_id: req.channelID,
@@ -479,7 +557,7 @@ WHERE message_fts_index MATCH :$query;
 					const message = decodeObject(ObjectType.CHANNEL, snapshot);
 					message.edited_timestamp = message.edited_timestamp === 0 ? null : new Date(message.edited_timestamp).toISOString();
 					if (message.author__id < 281474976710656n) {
-						const webhookUser: any = statements.getWebhookUser.get({ id: message.author__id });
+						const webhookUser: any = statements.getWebhookUser.get({ internal_id: message.author__id });
 						message.webhook_id = webhookUser.webhook_id;
 						message.author = {
 							id: webhookUser.webhook_id,

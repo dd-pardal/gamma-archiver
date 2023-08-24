@@ -1,4 +1,5 @@
 import { workerData, parentPort } from "node:worker_threads";
+import { SqliteError } from "better-sqlite3";
 import { IteratorRequest, IteratorResponseFor, RequestType, ResponseFor, SingleRequest } from "./types.js";
 import { getRequestHandler } from "./request-handler.js";
 import { LoggingLevel } from "../util/log.js";
@@ -91,9 +92,13 @@ function messageHandler(req: SingleRequest | IteratorRequest) {
 			} satisfies WorkerSingleResponseMessage<any>);
 		}
 	} catch (error) {
+		let newError: any = error;
+		if (error instanceof SqliteError) {
+			newError = new Error(`SQLite error (${error.code}): ${error.message}`);
+		}
 		parentPort!.postMessage({
 			type: WorkerMessageType.ERROR,
-			error,
+			error: newError,
 		} satisfies WorkerErrorMessage);
 	}
 }

@@ -108,8 +108,8 @@ You can read the raw data from the database using the SQLite CLI or any SQLite d
   - [ ] DM channels
   - [x] Messages
     - [x] From text/announcement channels
-    - [ ] From voice channels
-    - [ ] From forum channels
+    - [x] From voice channels
+    - [x] From forum channels
     - [x] Attachments
       - [ ] Download attachments
     - [x] Reactions

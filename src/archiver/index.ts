@@ -1295,9 +1295,11 @@ Statistics:
 			syncAllGuildMembers(getLeastGatewayOccupiedAccount(guild.accountData.keys())!, guild);
 
 			for (const channel of guild.textChannels.values() as IterableIterator<CachedChannelWithSyncInfo>) {
-				// TODO: Sync forum and voice channels
-				if (channel.type === DBT.ChannelType.GuildText || channel.type === DBT.ChannelType.GuildAnnouncement) {
-					if (channel.accountsWithReadPermission.size > 0) {
+				if (channel.accountsWithReadPermission.size > 0) {
+					syncMessages(getLeastRESTOccupiedAccount(channel.accountsWithReadPermission)!, channel);
+
+					// Voice channels can't have threads
+					if (channel.type !== DBT.ChannelType.GuildVoice) {
 						if (channel.accountsWithReadPermission.size > 0) {
 							if (channel.accountsWithManageThreadsPermission.size > 0) {
 								syncAllArchivedThreads(getLeastRESTOccupiedAccount(channel.accountsWithManageThreadsPermission)!, channel, ArchivedThreadListType.PRIVATE);
@@ -1309,7 +1311,6 @@ Statistics:
 
 							syncAllArchivedThreads(getLeastRESTOccupiedAccount(channel.accountsWithReadPermission)!, channel, ArchivedThreadListType.PUBLIC);
 						}
-						syncMessages(getLeastRESTOccupiedAccount(channel.accountsWithReadPermission)!, channel);
 					}
 				}
 				(channel as CachedChannel).syncInfo = null;

@@ -14,6 +14,7 @@ export enum ObjectType {
 	CHANNEL,
 	MESSAGE,
 	ATTACHMENT,
+	FORUM_TAG,
 }
 
 enum ValueType {
@@ -183,6 +184,7 @@ const schemas: { [OT in ObjectType]: Schema } = {
 			["video_quality_mode", ValueType.INTEGER, NullValue.ABSENT],
 			["default_auto_archive_duration", ValueType.INTEGER, NullValue.ABSENT],
 			["flags", ValueType.INTEGER, NullValue.ABSENT],
+			["applied_tags", ValueType.BIG_INTEGER_ARRAY, NullValue.ABSENT],
 			["default_reaction_emoji", ValueType.EMOJI, NullValue.NULL],
 			["default_thread_rate_limit_per_user", ValueType.INTEGER, NullValue.ABSENT],
 			["default_sort_order", ValueType.INTEGER, NullValue.NULL],
@@ -239,6 +241,14 @@ const schemas: { [OT in ObjectType]: Schema } = {
 			["duration_secs", ValueType.FLOAT, NullValue.ABSENT],
 			["waveform", ValueType.BASE64, NullValue.ABSENT],
 			["flags", ValueType.INTEGER, NullValue.ABSENT],
+		],
+		subObjectProperties: [],
+	},
+	[ObjectType.FORUM_TAG]: {
+		properties: [
+			["id", ValueType.BIG_INTEGER],
+			["name", ValueType.STRING],
+			["moderated", ValueType.BOOLEAN],
 		],
 		subObjectProperties: [],
 	},
@@ -300,16 +310,16 @@ export function decodeSnowflakeArray(buf: Uint8Array): string[] {
 // I have observed some objects with both `emoji_id` and `emoji_name` being sent by the API.
 // It probably isn't possible to create them with an unmodified client but it seems that the
 // servers don't check that only one property is set.
-export type DiscordEmoji = { emoji_id: string; emoji_name: null } | { emoji_id: null; emoji_name: string };
-export function encodeEmojiProps(emoji: DiscordEmoji): bigint | string {
+export type DiscordEmojiProps = { emoji_id: string; emoji_name: null } | { emoji_id: null; emoji_name: string };
+export function encodeEmojiProps(emoji: DiscordEmojiProps): bigint | string {
 	return encodeEmoji({ id: emoji.emoji_id, name: emoji.emoji_name } as DBT.APIPartialEmoji);
 }
-export function decodeEmojiProps(data: bigint | string): DiscordEmoji {
+export function decodeEmojiProps(data: bigint | string): DiscordEmojiProps {
 	const emoji = decodeEmoji(data);
 	return {
 		emoji_id: emoji.id,
 		emoji_name: emoji.name,
-	} as DiscordEmoji;
+	} as DiscordEmojiProps;
 }
 export function encodeEmoji(emoji: DBT.APIPartialEmoji): bigint | string {
 	if (emoji.id != null)

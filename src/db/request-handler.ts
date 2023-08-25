@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as DBT from "discord-user-api-types/v9";
 import { default as SQLite, Statement, SqliteError } from "better-sqlite3";
 import { SingleRequest, ResponseFor, Timing, RequestType, IteratorRequest, IteratorResponseFor, GetGuildChannelsRequest, GetDMChannelsRequest, GetChannelMessagesRequest, AddSnapshotResult } from "./types.js";
-import { encodeSnowflakeArray, encodeObject, ObjectType, encodeImageHash, decodeObject, encodePermissionOverwrites, decodePermissionOverwrites, decodeImageHash, encodeEmoji } from "./generic-encoding.js";
+import { encodeSnowflakeArray, encodeObject, ObjectType, encodeImageHash, decodeObject, encodePermissionOverwrites, decodePermissionOverwrites, decodeImageHash, encodeEmoji, encodeEmojiProps, DiscordEmojiProps } from "./generic-encoding.js";
 import { mapIterator } from "../util/iterators.js";
 
 export type RequestHandler = {
@@ -174,7 +174,8 @@ UPDATE latest_member_snapshots SET _timestamp = :_timestamp, nick = :nick, avata
 SELECT _user_id FROM latest_member_snapshots WHERE _guild_id IS :_guild_id AND joined_at IS NOT NULL;
 `),
 		},
-		channel: getStatements("channel", "guild_id", ["position", "permission_overwrites", "name", "topic", "nsfw", "bitrate", "user_limit", "rate_limit_per_user", "icon", "owner_id", "parent_id", "rtc_region", "video_quality_mode", "thread_metadata__archived", "thread_metadata__auto_archive_duration", "thread_metadata__archive_timestamp", "thread_metadata__locked", "thread_metadata__invitable", "thread_metadata__create_timestamp", "default_auto_archive_duration", "flags", "default_reaction_emoji", "default_thread_rate_limit_per_user", "default_sort_order", "default_forum_layout"], ["guild_id", "type"]),
+		channel: getStatements("channel", "guild_id", ["position", "permission_overwrites", "name", "topic", "nsfw", "bitrate", "user_limit", "rate_limit_per_user", "icon", "owner_id", "parent_id", "rtc_region", "video_quality_mode", "thread_metadata__archived", "thread_metadata__auto_archive_duration", "thread_metadata__archive_timestamp", "thread_metadata__locked", "thread_metadata__invitable", "thread_metadata__create_timestamp", "default_auto_archive_duration", "flags", "applied_tags", "default_reaction_emoji", "default_thread_rate_limit_per_user", "default_sort_order", "default_forum_layout"], ["guild_id", "type"]),
+		forumTag: getStatements("forum_tag", "channel_id", ["name", "moderated", "emoji"], ["channel_id"]),
 		message: {
 			...getStatements("message", "channel_id", ["content", "flags", "embeds", "components", "_attachment_ids"], ["channel_id", "author__id", "tts", "mention_everyone", "mention_roles", "type", "activity__type", "activity__party_id", "message_reference__message_id", "message_reference__channel_id", "message_reference__guild_id", "interaction__id", "interaction__type", "interaction__name", "interaction__user__id", "_sticker_ids"]),
 			getLatestSnapshotsWithWHUsersByParentID: db.prepare(`\
@@ -376,6 +377,23 @@ WHERE message_fts_index MATCH :$query;
 				break;
 			}
 			case RequestType.ADD_CHANNEL_SNAPSHOT: {
+				const timestamp = encodeTiming(req.timing);
+				if (req.channel.type === DBT.ChannelType.GuildForum || req.channel.type === DBT.ChannelType.GuildMedia) {
+					for (const jsonTag of req.channel.available_tags) {
+						const tag = encodeObject(ObjectType.FORUM_TAG, jsonTag);
+						tag.channel_id = req.channel.id;
+						tag.emoji = encodeEmojiProps(jsonTag as DiscordEmojiProps);
+						tag._timestamp = timestamp;
+						addSnapshot(objectStatements.forumTag, tag);
+					}
+					syncDeletions(
+						objectStatements.forumTag,
+						BigInt(req.channel.id),
+						new Set(req.channel.available_tags.map(t => BigInt(t.id))),
+						timestamp
+					);
+				}
+
 				const channel = encodeObject(ObjectType.CHANNEL, req.channel);
 				if (req.channel.type === DBT.ChannelType.DM || req.channel.type === DBT.ChannelType.GroupDM) {
 					channel.guild_id = 0;
@@ -383,7 +401,8 @@ WHERE message_fts_index MATCH :$query;
 					channel.guild_id = null;
 				}
 				channel.permission_overwrites = (req.channel as any).permission_overwrites == null ? null : encodePermissionOverwrites((req.channel as any).permission_overwrites);
-				response = addSnapshot(objectStatements.channel, assignTiming(channel, req.timing));
+				channel._timestamp = timestamp;
+				response = addSnapshot(objectStatements.channel, channel);
 				break;
 			}
 			case RequestType.MARK_CHANNEL_AS_DELETED: {

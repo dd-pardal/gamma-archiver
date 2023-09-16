@@ -1,5 +1,8 @@
 # Gamma Archiver
 
+> [!NOTE]
+> This project isn’t dead. I’ve been reworking the thread synchronization algorithm so it can handle an arbitrarily big number of threads (which is a lot of work) and I don’t have much time to work on this due to my work as a student.
+
 > [!IMPORTANT]
 > This project is experimental and incomplete. While it works well right now, there are many features missing and many things, including the database format and the name of the project, may change.
 
